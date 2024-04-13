@@ -1,0 +1,1 @@
+avr-objcopy -O ihex target/avr-attiny85/debug/avr.elf target/avr-attiny85/debug/avr.hex
