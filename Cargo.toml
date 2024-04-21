@@ -9,6 +9,7 @@ ufmt = "0.2.0"
 nb = "0.1.2"
 embedded-hal = "1.0"
 avr-device = { version = "0.5.4", features = ["rt"] }
+itertools = { version = "0.12.1", default-features = false }
 
 [dependencies.attiny-hal]
 git = "https://github.com/rahix/avr-hal"
