@@ -1,8 +1,10 @@
-FROM ubuntu:22.04
+FROM ubuntu:20.04
+RUN sed -i \
+    's/htt[p|ps]:\/\/archive.ubuntu.com\/ubuntu\//mirror:\/\/mirrors.ubuntu.com\/mirrors.txt/g' \
+    /etc/apt/sources.list
 RUN apt update
-RUN apt install -y \
-    usbutils \
-    avrdude \
+RUN DEBIAN_FRONTEND=noninteractive apt install -y \
+    clang \
     avr-libc \
     gcc-avr \
     pkg-config \

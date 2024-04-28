@@ -2,6 +2,10 @@
 #![no_main]
 #![feature(abi_avr_interrupt)]
 #![feature(asm_experimental_arch)]
+#![allow(non_upper_case_globals)]
+#![allow(non_camel_case_types)]
+#![allow(non_snake_case)]
+include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
 use avr_device::attiny85::Peripherals;
 use avr_device::interrupt;
