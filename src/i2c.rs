@@ -70,7 +70,7 @@ impl<'cs> I2C<'cs> {
             w.usioif().set_bit();
             w.usicnt().bits(16 - 2 * n_bits)
         });
-        loop {
+        while self.dp.USI.usisr.read().usioif().bit_is_clear() {
             // Strobe clock (positive edge)
             self.dp.USI.usicr.modify(|_, w| w.usitc().set_bit());
             self.wait_for_scl_high();
@@ -78,9 +78,6 @@ impl<'cs> I2C<'cs> {
             // Strobe clock (negative edge)
             self.dp.USI.usicr.modify(|_, w| w.usitc().set_bit());
             delay_low();
-            if self.dp.USI.usisr.read().usioif().bit_is_set() {
-                break;
-            }
         }
     }
 
@@ -131,12 +128,12 @@ impl<'cs> I2C<'cs> {
             w.pb0().set_bit();
             w.pb2().set_bit()
         });
-        self.wait_for_scl_high();
-        delay_low();
 
         // Start condition: drive SDA low, wait, then drive SCL low
+        self.wait_for_scl_high();
+        delay_low(); // Start condition setup time
         self.dp.PORTB.portb.modify(|_, w| w.pb0().clear_bit());
-        delay_high();
+        delay_high(); // Start condition hold time
         self.dp.PORTB.portb.modify(|_, w| w.pb2().clear_bit());
         delay_low();
         self.dp.PORTB.portb.modify(|_, w| w.pb0().set_bit());

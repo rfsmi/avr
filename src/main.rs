@@ -5,12 +5,14 @@
 
 mod bme280;
 mod i2c;
-mod serial;
+mod lcd1602;
+mod uart;
 
 use attiny_hal as hal;
 use avr_device::attiny85::Peripherals;
 use avr_device::interrupt::{free, CriticalSection, Mutex};
 use core::cell::Cell;
+use core::iter::from_fn;
 use core::mem::MaybeUninit;
 use embedded_hal::delay::DelayNs;
 
@@ -24,6 +26,71 @@ static PERIPHERALS: Mutex<Cell<MaybeUninit<Peripherals>>> =
 #[inline(always)]
 fn peripherals<'cs>(cs: CriticalSection<'cs>) -> &'cs Peripherals {
     unsafe { (*PERIPHERALS.borrow(cs).as_ptr()).assume_init_ref() }
+}
+
+fn i32_fp_to_u8s(mut n: i32) -> impl Iterator<Item = u8> {
+    #[derive(PartialEq)]
+    enum Next {
+        Minus,
+        Digit(bool),
+        Dot,
+    }
+    use Next::*;
+    let mut next = Digit(false);
+    if n < 0 {
+        n *= -1;
+        next = Minus;
+    };
+    let mut buffer = [0; 16];
+    let mut i = buffer.len() - 1;
+    while n > 0 {
+        buffer[i] = (n % 10) as u8;
+        n /= 10;
+        i -= 1;
+    }
+    let mut digits = buffer.into_iter();
+
+    from_fn(move || loop {
+        match next {
+            Minus => {
+                next = Digit(false);
+                return Some(b'-');
+            }
+            Dot => {
+                next = Digit(true);
+                return Some(b'.');
+            }
+            Digit(force) => {
+                let d = digits.next()?;
+                if digits.len() == 2 {
+                    next = Dot;
+                    return Some(b'0' + d);
+                }
+                if force || d != 0 {
+                    next = Digit(true);
+                    return Some(b'0' + d);
+                }
+            }
+        }
+    })
+}
+
+fn main_loop() -> Result<(), &'static str> {
+    let mut lcd = lcd1602::setup()?;
+    let bme280 = bme280::setup()?;
+
+    loop {
+        lcd.set_cursor(0, 0);
+        lcd.write_str("Temp: ");
+        uart::write_str("\r\nTemperature: ");
+        let temp = bme280.get_temperature()?;
+        for byte in i32_fp_to_u8s(temp) {
+            uart::write(byte);
+            lcd.write(byte);
+        }
+        lcd.sync()?;
+        Delay::new().delay_ms(500);
+    }
 }
 
 #[avr_device::entry]
@@ -55,49 +122,8 @@ fn main() -> ! {
 
     unsafe { avr_device::interrupt::enable() };
 
-    let bme280 = match bme280::BME280::setup() {
-        Ok(device) => device,
-        Err(msg) => {
-            serial::write_line(msg);
-            panic!();
-        }
-    };
-
-    loop {
-        match bme280.get_temperature() {
-            Ok(mut temp) => {
-                serial::write_str("Temperature: ");
-                if temp < 0 {
-                    serial::write(b'-');
-                }
-                let mut digits = [0; 10];
-                let mut i = digits.len() - 1;
-                while temp > 0 {
-                    digits[i] = (temp % 10) as u8;
-                    temp /= 10;
-                    i -= 1;
-                }
-                let mut has_nonzero = false;
-                for (i, d) in digits.into_iter().enumerate() {
-                    let ones_digit = i == digits.len() - 3;
-                    if d != 0 || ones_digit {
-                        has_nonzero = true;
-                    }
-                    if has_nonzero {
-                        serial::write(d + b'0')
-                    }
-                    if ones_digit {
-                        serial::write(b'.');
-                    }
-                }
-                serial::write_str("\r\n");
-            }
-            Err(msg) => {
-                serial::write_line(msg);
-                break;
-            }
-        }
-        Delay::new().delay_ms(1000);
+    if let Err(msg) = main_loop() {
+        uart::write_line(msg);
     }
 
     loop {}
