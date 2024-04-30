@@ -28,7 +28,7 @@ fn peripherals<'cs>(cs: CriticalSection<'cs>) -> &'cs Peripherals {
     unsafe { (*PERIPHERALS.borrow(cs).as_ptr()).assume_init_ref() }
 }
 
-fn i32_fp_to_u8s(mut n: i32) -> impl Iterator<Item = u8> {
+fn format_i32(mut n: i32, decimal_place: Option<usize>) -> impl Iterator<Item = u8> {
     #[derive(PartialEq)]
     enum Next {
         Minus,
@@ -41,15 +41,12 @@ fn i32_fp_to_u8s(mut n: i32) -> impl Iterator<Item = u8> {
         n *= -1;
         next = Minus;
     };
-    let mut buffer = [0; 16];
-    let mut i = buffer.len() - 1;
-    while n > 0 {
-        buffer[i] = (n % 10) as u8;
+    let mut buffer = [0; 12];
+    for byte in buffer.iter_mut().rev() {
+        *byte = (n % 10) as u8;
         n /= 10;
-        i -= 1;
     }
     let mut digits = buffer.into_iter();
-
     from_fn(move || loop {
         match next {
             Minus => {
@@ -62,11 +59,11 @@ fn i32_fp_to_u8s(mut n: i32) -> impl Iterator<Item = u8> {
             }
             Digit(force) => {
                 let d = digits.next()?;
-                if digits.len() == 2 {
+                if Some(digits.len()) == decimal_place {
                     next = Dot;
                     return Some(b'0' + d);
                 }
-                if force || d != 0 {
+                if force || digits.len() == 0 || d != 0 {
                     next = Digit(true);
                     return Some(b'0' + d);
                 }
@@ -75,21 +72,45 @@ fn i32_fp_to_u8s(mut n: i32) -> impl Iterator<Item = u8> {
     })
 }
 
+fn read_pot() -> u16 {
+    free(|cs| {
+        let pb = peripherals(cs);
+        // Start measurement
+        pb.ADC.adcsra.modify(|_, w| w.adsc().set_bit());
+        while pb.ADC.adcsra.read().adsc().bit_is_set() {
+            // Wait for conversion to complete
+        }
+        pb.ADC.adc.read().bits()
+    })
+}
+
 fn main_loop() -> Result<(), &'static str> {
     let mut lcd = lcd1602::setup()?;
     let bme280 = bme280::setup()?;
 
     loop {
+        let sensor_temp = bme280.get_temperature()?;
+        const MIN_TEMP: i32 = 1600; // 16 degrees
+        const MAX_TEMP: i32 = 2400; // 24 degrees
+        const MAX_POT: i32 = 1024;
+        let pot = read_pot() as i32;
+        let set_temp = (MIN_TEMP * (MAX_POT - pot) + MAX_TEMP * pot) / MAX_POT;
+        lcd.reset();
         lcd.set_cursor(0, 0);
         lcd.write_str("Temp: ");
-        uart::write_str("\r\nTemperature: ");
-        let temp = bme280.get_temperature()?;
-        for byte in i32_fp_to_u8s(temp) {
-            uart::write(byte);
+        for byte in format_i32(sensor_temp, Some(2)) {
             lcd.write(byte);
         }
+        lcd.set_cursor(0, 1);
+        lcd.write_str(" Set: ");
+        for byte in format_i32(set_temp, Some(2)) {
+            lcd.write(byte);
+        }
+        lcd.set_align(lcd1602::Align::Right);
+        lcd.set_cursor(15, 0);
+        lcd.write_str(if sensor_temp < set_temp { "ON" } else { "OFF" });
         lcd.sync()?;
-        Delay::new().delay_ms(500);
+        Delay::new().delay_ms(250);
     }
 }
 
@@ -104,7 +125,7 @@ fn main() -> ! {
             w.pb1().set_bit();
             w.pb2().clear_bit();
             w.pb3().set_bit();
-            w.pb4().set_bit();
+            w.pb4().clear_bit();
             w.pb5().set_bit()
         });
         dp.PORTB.portb.write(|w| {
@@ -114,6 +135,13 @@ fn main() -> ! {
             w.pb3().clear_bit();
             w.pb4().clear_bit();
             w.pb5().clear_bit()
+        });
+
+        // Setup pb4 for pot input
+        dp.ADC.admux.write(|w| w.mux().adc2());
+        dp.ADC.adcsra.write(|w| {
+            w.aden().set_bit(); // Enable ADC
+            w.adps().prescaler_8() // Set prescaler to 8 (1Mhz -> 125Khz)
         });
 
         // Initialize the peripherals global
